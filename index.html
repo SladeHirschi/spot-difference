@@ -469,6 +469,8 @@ function hostGame() {
     showLobby(code);
   });
   net.peer.on('error', e => { menuMsg.textContent = 'Connection error: ' + e.type + ' (try again)'; });
+  // if the tab is briefly suspended (mobile screen lock, app switch), reclaim the room id
+  net.peer.on('disconnected', () => { try { net.peer.reconnect(); } catch {} });
   net.peer.on('connection', conn => {
     conn.on('open', () => net.conns.push(conn));
     conn.on('data', raw => {
@@ -500,6 +502,7 @@ function joinGame() {
   if (code.length !== 4) { menuMsg.textContent = 'Enter the 4-letter room code.'; return; }
   menuMsg.textContent = 'Connecting…';
   net.peer = new Peer();
+  net.peer.on('disconnected', () => { try { net.peer.reconnect(); } catch {} });
   net.peer.on('open', () => {
     net.myId = net.peer.id;
     const conn = net.peer.connect('spotdiff-' + code, { reliable: true });
