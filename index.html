@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spot the Difference: The Game</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a2e; font-family: system-ui, sans-serif; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  #hud {
+    position: fixed; top: 0; left: 0; right: 0;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    padding: 12px; pointer-events: none;
+  }
+  #banner {
+    background: rgba(20, 20, 40, 0.85); color: #fff; border-radius: 12px;
+    padding: 10px 20px; text-align: center; max-width: 720px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.4);
+  }
+  #banner h1 { margin: 0; font-size: 18px; }
+  #banner p { margin: 4px 0 0; font-size: 13px; color: #b8b8d0; }
+  #toolbar { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; pointer-events: auto; max-width: 94vw; }
+  button {
+    background: #4a4ae0; color: #fff; border: 0; border-radius: 8px;
+    padding: 8px 14px; font-size: 13px; cursor: pointer; font-weight: 600;
+  }
+  button:hover { background: #5f5fff; }
+  button.secondary { background: #333355; }
+  button.danger { background: #c0392b; }
+  input {
+    background: #22224a; color: #fff; border: 1px solid #4a4ae0; border-radius: 8px;
+    padding: 10px 14px; font-size: 15px; text-align: center;
+  }
+  input.code { text-transform: uppercase; letter-spacing: 4px; width: 120px; }
+  #status {
+    position: fixed; bottom: 44px; left: 50%; transform: translateX(-50%);
+    background: rgba(20,20,40,.85); color: #ffd866; border-radius: 10px;
+    padding: 8px 16px; font-size: 14px; pointer-events: none; text-align: center;
+    max-width: 92vw;
+  }
+  #lockhint {
+    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+    color: #8888aa; font-size: 12px; pointer-events: none; text-align: center;
+  }
+  #crosshair {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #fff; box-shadow: 0 0 4px rgba(0,0,0,.8);
+    pointer-events: none; opacity: .9;
+  }
+  .overlay {
+    position: fixed; inset: 0; background: rgba(10,10,25,.96); color: #fff;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; text-align: center; padding: 24px; z-index: 10;
+  }
+  .overlay h2 { margin: 0; font-size: 26px; }
+  .overlay p { margin: 0; color: #b8b8d0; max-width: 580px; line-height: 1.6; }
+  .overlay .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  #player-list { list-style: none; margin: 0; padding: 0; font-size: 16px; }
+  #player-list li { padding: 3px 0; }
+  #room-code { font-size: 34px; letter-spacing: 8px; color: #ffd866; font-weight: 800; }
+  .hidden { display: none !important; }
+  kbd { background: #333355; border-radius: 4px; padding: 1px 6px; font-size: 12px; }
+  .dot { display:inline-block; width:12px; height:12px; border-radius:50%; margin-right:8px; }
+</style>
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="hud">
+  <div id="banner">
+    <h1 id="phase-title">Spot the Difference</h1>
+    <p id="phase-help"></p>
+  </div>
+  <div id="toolbar"></div>
+</div>
+<div id="status" class="hidden"></div>
+<div id="lockhint" class="hidden">Click to look around · <kbd>Esc</kbd> frees the mouse for the buttons</div>
+<div id="crosshair" class="hidden"></div>
+
+<!-- Main menu -->
+<div id="menu" class="overlay">
+  <h2>Spot the Difference: The Game</h2>
+  <p>One <b>Memorizer</b> studies the room, then looks away while the <b>Editors</b> secretly change it — or disguise <i>themselves</i> as furniture.
+     The Memorizer returns with limited ammo: wrong accusations burn a shot, and if they run dry the Editors win.
+     Editors win if <b>anyone survives</b> the round. Get caught and you're out.</p>
+  <input id="name-input" placeholder="Your name" maxlength="12">
+  <div class="row">
+    <button id="btn-host">Host a room</button>
+    <button id="btn-solo" class="secondary">Solo hot-seat (test)</button>
+  </div>
+  <div class="row">
+    <input id="code-input" class="code" placeholder="CODE" maxlength="4">
+    <button id="btn-join">Join a room</button>
+  </div>
+  <p id="menu-msg" style="color:#ff9f9f"></p>
+</div>
+
+<!-- Lobby -->
+<div id="lobby" class="overlay hidden">
+  <h2>Lobby</h2>
+  <p>Share this code with friends (they open this same page and hit Join):</p>
+  <div id="room-code">----</div>
+  <ul id="player-list"></ul>
+  <p id="lobby-msg"></p>
+  <button id="btn-start" class="hidden">Start round</button>
+</div>
+
+<!-- Generic message overlay (handoffs, look-away, results) -->
+<div id="msg-overlay" class="overlay hidden">
+  <h2 id="msg-title"></h2>
+  <p id="msg-body"></p>
+  <button id="msg-btn" class="hidden"></button>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ================== Scene ==================
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a2e);
+const camera = new THREE.PerspectiveCamera(68, innerWidth / innerHeight, 0.1, 100);
+camera.rotation.order = 'YXZ';
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+document.getElementById('app').appendChild(renderer.domElement);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const sun = new THREE.DirectionalLight(0xfff2d9, 1.3);
+sun.position.set(6, 10, 6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -14; sun.shadow.camera.right = 14;
+sun.shadow.camera.top = 14; sun.shadow.camera.bottom = -14;
+scene.add(sun);
+const fill = new THREE.PointLight(0xaabbff, 25, 30);
+fill.position.set(-6, 3.5, 3);
+scene.add(fill);
+
+// ================== Room ==================
+const ROOM = { w: 18, d: 14, h: 4.5 };
+function mat(color) { return new THREE.MeshStandardMaterial({ color }); }
+const floor = new THREE.Mesh(new THREE.BoxGeometry(ROOM.w, 0.2, ROOM.d), mat(0x8a7355));
+floor.position.y = -0.1; floor.receiveShadow = true; scene.add(floor);
+for (const [w, h, d, x, y, z, color] of [
+  [ROOM.w, ROOM.h, 0.2, 0, ROOM.h / 2, -ROOM.d / 2, 0x5b6e8c],
+  [ROOM.w, ROOM.h, 0.2, 0, ROOM.h / 2, ROOM.d / 2, 0x5b6e8c],
+  [0.2, ROOM.h, ROOM.d, -ROOM.w / 2, ROOM.h / 2, 0, 0x50617d],
+  [0.2, ROOM.h, ROOM.d, ROOM.w / 2, ROOM.h / 2, 0, 0x50617d],
+  [ROOM.w, 0.2, ROOM.d, 0, ROOM.h, 0, 0x3d4a5f],
+]) {
+  const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color));
+  wall.position.set(x, y, z); wall.receiveShadow = true; scene.add(wall);
+}
+
+// ================== Furniture ==================
+const PALETTE = [0xe74c3c, 0x3498db, 0x2ecc71, 0xf1c40f, 0x9b59b6, 0xe67e22, 0x1abc9c, 0xecf0f1];
+const objects = []; // { group, name, movable, wallItem, paintables[], details[], original, blendOwner? }
+
+function box(w, h, d, color, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color));
+  m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; return m;
+}
+function cyl(rt, rb, h, color, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, 24), mat(color));
+  m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; return m;
+}
+function sph(r, color, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), mat(color));
+  m.position.set(x, y, z); m.castShadow = true; return m;
+}
+function register(name, group, { movable = true, wallItem = false, paintables = [], details = [], x = 0, z = 0, ry = 0 } = {}) {
+  group.userData.isObject = true;
+  group.position.x = x; group.position.z = z; group.rotation.y = ry;
+  const rec = { group, name, movable, wallItem, paintables, details, blendOwner: null };
+  objects.push(rec); scene.add(group); return rec;
+}
+function hiddenExtra(mesh) { mesh.visible = false; return mesh; }
+
+{ const g = new THREE.Group();
+  g.add(box(2.4, 0.5, 0.6, 0x4a3b28, 0, 0.25, 0));
+  const screen = box(2.0, 1.1, 0.08, 0x111122, 0, 1.15, 0);
+  const remote = box(0.1, 0.04, 0.24, 0x222222, 0.8, 0.53, 0.1);
+  g.add(screen, remote);
+  register('TV', g, { paintables: [screen], details: [remote], x: -4.5, z: -6.4 }); }
+{ const g = new THREE.Group();
+  const base = box(2.4, 0.5, 1, 0x2980b9, 0, 0.25, 0);
+  const backr = box(2.4, 0.7, 0.25, 0x2471a3, 0, 0.85, -0.38);
+  const armL = box(0.25, 0.4, 1, 0x2471a3, -1.08, 0.7, 0);
+  const armR = box(0.25, 0.4, 1, 0x2471a3, 1.08, 0.7, 0);
+  const cush1 = box(0.55, 0.18, 0.55, 0xf1c40f, -0.5, 0.6, 0.05);
+  const cush2 = box(0.55, 0.18, 0.55, 0x1abc9c, 0.5, 0.6, 0.05);
+  const extraCush = hiddenExtra(box(0.5, 0.16, 0.5, 0xe74c3c, 0, 0.62, 0.05));
+  cush1.rotation.y = 0.3; cush2.rotation.y = -0.2; extraCush.rotation.y = 0.15;
+  g.add(base, backr, armL, armR, cush1, cush2, extraCush);
+  register('Sofa', g, { paintables: [base, backr, armL, armR], details: [cush1, cush2, extraCush], x: -4.5, z: -2.6, ry: Math.PI }); }
+{ const g = new THREE.Group();
+  const top = box(1.4, 0.1, 0.8, 0x8a5f38, 0, 0.42, 0);
+  g.add(top);
+  for (const [x, z] of [[-0.6, -0.3], [0.6, -0.3], [-0.6, 0.3], [0.6, 0.3]])
+    g.add(box(0.08, 0.42, 0.08, 0x6e4a2a, x, 0.21, z));
+  const bowl = cyl(0.18, 0.1, 0.12, 0x3498db, -0.3, 0.53, 0);
+  const extraBook = hiddenExtra(box(0.3, 0.05, 0.22, 0xe67e22, 0.35, 0.5, 0.1));
+  g.add(bowl, extraBook);
+  register('Coffee table', g, { paintables: [top], details: [bowl, extraBook], x: -4.5, z: -4.4 }); }
+{ const g = new THREE.Group();
+  const rug = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 0.04, 32), mat(0x9b59b6));
+  rug.position.y = 0.02; rug.receiveShadow = true; g.add(rug);
+  register('Round rug', g, { paintables: [rug], x: -4.5, z: -4.4 }); }
+{ const g = new THREE.Group();
+  const base = box(1.1, 0.5, 1, 0x16a085, 0, 0.25, 0);
+  const backr = box(1.1, 0.8, 0.25, 0x117a65, 0, 0.9, -0.38);
+  g.add(base, backr, box(0.22, 0.35, 1, 0x117a65, -0.45, 0.68, 0), box(0.22, 0.35, 1, 0x117a65, 0.45, 0.68, 0));
+  const cush = box(0.55, 0.16, 0.5, 0xf39c12, 0, 0.58, 0.08);
+  g.add(cush);
+  register('Armchair', g, { paintables: [base, backr, cush], details: [cush], x: -7.2, z: -4.2, ry: Math.PI / 3 }); }
+{ const g = new THREE.Group();
+  g.add(cyl(0.25, 0.35, 0.1, 0x444455, 0, 0.05, 0), cyl(0.04, 0.04, 1.5, 0x888899, 0, 0.8, 0));
+  const shade = cyl(0.25, 0.45, 0.5, 0xf1c40f, 0, 1.75, 0);
+  g.add(shade);
+  register('Floor lamp', g, { paintables: [shade], x: -8.2, z: -6.2 }); }
+{ const g = new THREE.Group();
+  const o = box(0.8, 0.4, 0.8, 0xd35400, 0, 0.2, 0); g.add(o);
+  register('Ottoman', g, { paintables: [o], x: -6.3, z: -1.4, ry: 0.4 }); }
+{ const g = new THREE.Group();
+  const top = box(2.2, 0.12, 1.1, 0xa0713d, 0, 0.75, 0); g.add(top);
+  for (const [x, z] of [[-1, -0.45], [1, -0.45], [-1, 0.45], [1, 0.45]])
+    g.add(box(0.12, 0.75, 0.12, 0x7a5328, x, 0.37, z));
+  const mug = cyl(0.09, 0.08, 0.16, 0xe74c3c, 0.6, 0.89, 0.2);
+  const plate = cyl(0.22, 0.18, 0.04, 0xecf0f1, -0.4, 0.83, -0.1);
+  const extraMug = hiddenExtra(cyl(0.09, 0.08, 0.16, 0x3498db, -0.1, 0.89, 0.25));
+  g.add(mug, plate, extraMug);
+  register('Dining table', g, { paintables: [top], details: [mug, plate, extraMug], x: 4.6, z: -4.6 }); }
+function makeChair(seatColor, legColor) {
+  const g = new THREE.Group();
+  const seat = box(0.7, 0.1, 0.7, seatColor, 0, 0.45, 0);
+  const back = box(0.7, 0.8, 0.1, seatColor, 0, 0.9, -0.3);
+  g.add(seat, back);
+  for (const [x, z] of [[-0.28, -0.28], [0.28, -0.28], [-0.28, 0.28], [0.28, 0.28]])
+    g.add(box(0.08, 0.45, 0.08, legColor, x, 0.22, z));
+  return { g, paint: [seat, back] };
+}
+{ const { g, paint } = makeChair(0xc0392b, 0x5a2620);
+  register('Red chair', g, { paintables: paint, x: 4.6, z: -3.1, ry: Math.PI }); }
+{ const { g, paint } = makeChair(0x2c3e50, 0x1a252f);
+  register('Blue chair', g, { paintables: paint, x: 3.2, z: -5.4, ry: -Math.PI / 2.5 }); }
+{ const g = new THREE.Group();
+  const pot = cyl(0.3, 0.22, 0.45, 0xe67e22, 0, 0.22, 0);
+  const leaves = sph(0.5, 0x27ae60, 0, 0.95, 0);
+  g.add(pot, leaves);
+  register('Plant', g, { paintables: [pot, leaves], x: 8, z: -6.2 }); }
+{ const g = new THREE.Group();
+  g.add(box(1.6, 2, 0.4, 0x6e4a2a, 0, 1, 0), box(1.44, 0.06, 0.34, 0x8a5f38, 0, 1.0, 0.02), box(1.44, 0.06, 0.34, 0x8a5f38, 0, 1.6, 0.02));
+  const books = [];
+  let bx = -0.6;
+  for (let i = 0; i < 5; i++) { const b = box(0.16, 0.42, 0.28, PALETTE[i % 8], bx, 1.28, 0.03); books.push(b); g.add(b); bx += 0.22; }
+  bx = -0.6;
+  for (let i = 0; i < 4; i++) { const b = box(0.16, 0.42, 0.28, PALETTE[(i + 4) % 8], bx, 0.7, 0.03); books.push(b); g.add(b); bx += 0.22; }
+  const extraBook = hiddenExtra(box(0.16, 0.42, 0.28, 0x2ecc71, bx, 0.7, 0.03));
+  books.push(extraBook); g.add(extraBook);
+  register('Bookshelf', g, { paintables: books.slice(0, 9), details: books, x: 0.6, z: -6.7 }); }
+{ const g = new THREE.Group();
+  g.add(box(1.4, 0.07, 0.3, 0x8a5f38, 0, 0, 0));
+  const t1 = sph(0.09, 0xe74c3c, -0.5, 0.12, 0);
+  const t2 = box(0.14, 0.2, 0.14, 0x3498db, -0.1, 0.11, 0);
+  const t3 = cyl(0.06, 0.09, 0.18, 0xf1c40f, 0.3, 0.1, 0);
+  const extraT = hiddenExtra(sph(0.08, 0x2ecc71, 0.55, 0.1, 0));
+  g.add(t1, t2, t3, extraT);
+  const r = register('Wall shelf', g, { movable: false, wallItem: true, paintables: [t1, t2, t3], details: [t1, t2, t3, extraT], x: -1.8, z: -6.8 });
+  r.group.position.y = 2.4; }
+{ const g = new THREE.Group();
+  const face = cyl(0.35, 0.35, 0.08, 0xecf0f1);
+  face.rotation.x = Math.PI / 2;
+  g.add(face, box(0.04, 0.24, 0.02, 0x222222, 0, 0.1, 0.05), box(0.04, 0.16, 0.02, 0x222222, 0.06, 0.04, 0.05));
+  const r = register('Wall clock', g, { movable: false, wallItem: true, paintables: [face], x: 0.6, z: -6.8 });
+  r.group.position.y = 3.1; }
+{ const g = new THREE.Group();
+  g.add(box(1.2, 0.9, 0.06, 0x333333));
+  const art = box(1.0, 0.7, 0.04, 0x1abc9c, 0, 0, 0.03);
+  g.add(art);
+  const r = register('Picture', g, { movable: false, wallItem: true, paintables: [art], x: 3, z: -6.85 });
+  r.group.position.y = 2.5; }
+{ const g = new THREE.Group();
+  const paper = box(0.9, 1.3, 0.03, 0xe67e22);
+  const stripe = box(0.7, 0.25, 0.02, 0x2c3e50, 0, 0.3, 0.02);
+  g.add(paper, stripe);
+  const r = register('Poster', g, { movable: false, wallItem: true, paintables: [paper, stripe], x: -6.5, z: -6.85 });
+  r.group.position.y = 2.5; }
+{ const g = new THREE.Group();
+  const top = box(2, 0.1, 0.9, 0x9a6a3f, 0, 0.74, 0); g.add(top);
+  for (const [x, z] of [[-0.9, -0.35], [0.9, -0.35], [-0.9, 0.35], [0.9, 0.35]])
+    g.add(box(0.1, 0.74, 0.1, 0x6e4a2a, x, 0.37, z));
+  const screen = box(0.9, 0.55, 0.06, 0x16213e, 0, 1.35, -0.2);
+  g.add(cyl(0.06, 0.12, 0.25, 0x555566, 0, 0.9, -0.2), screen);
+  const keyb = box(0.6, 0.04, 0.22, 0xbdc3c7, 0, 0.81, 0.15);
+  const deskMug = cyl(0.08, 0.07, 0.15, 0x9b59b6, 0.7, 0.87, 0.1);
+  const extraCup = hiddenExtra(cyl(0.07, 0.07, 0.2, 0xe74c3c, -0.7, 0.9, 0.05));
+  g.add(keyb, deskMug, extraCup);
+  register('Desk', g, { paintables: [top, screen, keyb], details: [deskMug, extraCup], x: 7.9, z: -0.5, ry: -Math.PI / 2 }); }
+{ const g = new THREE.Group();
+  const bin = cyl(0.25, 0.2, 0.5, 0x7f8c8d, 0, 0.25, 0); g.add(bin);
+  register('Trash bin', g, { paintables: [bin], x: 8.2, z: -2.2 }); }
+{ const g = new THREE.Group();
+  const rug = box(4.2, 0.04, 2.8, 0x34495e, 0, 0.02, 0);
+  const b1 = box(4.2, 0.041, 0.3, 0xf1c40f, 0, 0.021, -1.25);
+  const b2 = box(4.2, 0.041, 0.3, 0xf1c40f, 0, 0.021, 1.25);
+  rug.castShadow = b1.castShadow = b2.castShadow = false;
+  g.add(rug, b1, b2);
+  register('Area rug', g, { paintables: [rug, b1, b2], x: 0, z: -1.5 }); }
+{ const g = new THREE.Group();
+  const seat = box(1.6, 0.12, 0.5, 0x95a5a6, 0, 0.45, 0);
+  g.add(seat, box(0.1, 0.45, 0.45, 0x707b7c, -0.65, 0.22, 0), box(0.1, 0.45, 0.45, 0x707b7c, 0.65, 0.22, 0));
+  register('Bench', g, { paintables: [seat], x: 0.5, z: 3.4, ry: 0.2 }); }
+{ const g = new THREE.Group();
+  const seat = cyl(0.3, 0.3, 0.08, 0xc0392b, 0, 0.55, 0);
+  g.add(seat, cyl(0.05, 0.08, 0.55, 0x333344, 0, 0.27, 0));
+  register('Stool', g, { paintables: [seat], x: 2.4, z: 0.8 }); }
+{ const g = new THREE.Group();
+  const body = cyl(0.18, 0.28, 0.7, 0x2980b9, 0, 0.35, 0);
+  const neck = cyl(0.1, 0.18, 0.25, 0x2980b9, 0, 0.82, 0);
+  const stick = box(0.03, 0.8, 0.03, 0x8a5f38, 0.03, 1.3, 0);
+  stick.rotation.z = 0.15;
+  g.add(body, neck, stick);
+  register('Vase', g, { paintables: [body, neck], details: [stick], x: -3.2, z: 4.4 }); }
+{ const g = new THREE.Group();
+  const pot = cyl(0.35, 0.28, 0.55, 0xc0632b, 0, 0.27, 0);
+  g.add(pot, cyl(0.05, 0.07, 1.2, 0x6e4a2a, 0, 1.1, 0));
+  const l1 = sph(0.4, 0x27ae60, 0, 1.85, 0);
+  const l2 = sph(0.3, 0x2ecc71, 0.3, 1.55, 0.1);
+  const l3 = sph(0.28, 0x229954, -0.28, 1.6, -0.1);
+  g.add(l1, l2, l3);
+  register('Tall plant', g, { paintables: [pot, l1, l2, l3], details: [l2, l3], x: -8.2, z: 2.4 }); }
+{ const g = new THREE.Group();
+  const c = box(0.7, 0.7, 0.7, 0xb08d57, 0, 0.35, 0); g.add(c);
+  register('Crate', g, { paintables: [c], x: 6.2, z: 4.2, ry: 0.3 }); }
+{ const g = new THREE.Group();
+  const b1 = box(0.8, 0.5, 0.8, 0xa07d4b, 0, 0.25, 0);
+  const b2 = box(0.65, 0.45, 0.65, 0x8f6d3d, 0, 0.72, 0.03);
+  const b3 = box(0.45, 0.35, 0.45, 0xb08d57, 0.05, 1.12, -0.02);
+  b3.rotation.y = 0.4;
+  g.add(b1, b2, b3);
+  register('Box stack', g, { paintables: [b1, b2, b3], details: [b3], x: 7.4, z: 4.9, ry: -0.2 }); }
+{ const g = new THREE.Group();
+  const top = cyl(0.4, 0.4, 0.08, 0x8a5f38, 0, 0.6, 0);
+  g.add(top, cyl(0.06, 0.1, 0.6, 0x6e4a2a, 0, 0.3, 0));
+  const shade = cyl(0.12, 0.2, 0.25, 0xe8daef, 0, 0.85, 0);
+  g.add(cyl(0.02, 0.02, 0.3, 0x555566, 0, 0.72, 0), shade);
+  register('Side table', g, { paintables: [top, shade], details: [shade], x: -7.8, z: 5.2 }); }
+
+// Save the room's true original state so rounds can reset
+const initialState = objects.map(o => ({
+  p: o.group.position.clone(), ry: o.group.rotation.y, rz: o.group.rotation.z,
+  s: o.group.scale.x,
+  colors: o.paintables.map(m => m.material.color.getHex()),
+  vis: o.details.map(m => m.visible),
+}));
+const BASE_OBJECT_COUNT = objects.length;
+function resetRoom() {
+  // remove blend props
+  while (objects.length > BASE_OBJECT_COUNT) {
+    const o = objects.pop();
+    scene.remove(o.group);
+  }
+  objects.forEach((o, i) => {
+    const s = initialState[i];
+    o.group.position.copy(s.p);
+    o.group.rotation.y = s.ry; o.group.rotation.z = s.rz;
+    o.group.scale.setScalar(s.s);
+    o.paintables.forEach((m, j) => m.material.color.setHex(s.colors[j]));
+    o.details.forEach((m, j) => m.visible = s.vis[j]);
+    setEmissive(o, 0x000000);
+  });
+}
+
+// ================== Avatars (other players) ==================
+function nameSprite(text, cssColor) {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = 'rgba(10,10,25,0.55)';
+  ctx.fillRect(48, 8, 160, 48);
+  ctx.font = 'bold 30px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = cssColor;
+  ctx.fillText(text.slice(0, 12), 128, 33);
+  const tex = new THREE.CanvasTexture(c);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+  s.scale.set(1.8, 0.45, 1);
+  s.position.y = 2.05;
+  return s;
+}
+function makeAvatar(colorHex, name) {
+  const g = new THREE.Group();
+  const meshes = [];
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.24, 0.5, 6, 12), mat(colorHex));
+  body.position.y = 0.85; body.castShadow = true; meshes.push(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.21, 16, 12), mat(0xf5d0a9));
+  head.position.y = 1.42; head.castShadow = true; meshes.push(head);
+  g.add(body, head);
+  for (const s of [-1, 1]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 8), mat(0x222222));
+    eye.position.set(s * 0.08, 1.46, 0.18); meshes.push(eye); g.add(eye);
+  }
+  for (const [x, y, len, c] of [[-0.32, 1.22, 0.5, colorHex], [0.32, 1.22, 0.5, colorHex], [-0.12, 0.5, 0.5, 0x333344], [0.12, 0.5, 0.5, 0x333344]]) {
+    const limb = box(0.12, len, 0.12, c, x, y - len / 2, 0);
+    meshes.push(limb); g.add(limb);
+  }
+  const tag = nameSprite(name, '#' + new THREE.Color(colorHex).getHexString());
+  g.add(tag);
+  for (const m of meshes) { m.material.transparent = true; }
+  g.userData.meshes = meshes;
+  scene.add(g);
+  return g;
+}
+function setAvatarGhost(g, ghost) {
+  for (const m of g.userData.meshes) m.material.opacity = ghost ? 0.3 : 1;
+}
+
+// ================== Blend props ==================
+const BLEND_PROPS = {
+  crate: c => { const g = new THREE.Group(); g.add(box(0.7, 0.7, 0.7, c, 0, 0.35, 0)); return g; },
+  plant: c => { const g = new THREE.Group(); g.add(cyl(0.3, 0.22, 0.45, 0xc0632b, 0, 0.22, 0), sph(0.5, c, 0, 0.95, 0)); return g; },
+  vase:  c => { const g = new THREE.Group(); g.add(cyl(0.18, 0.28, 0.7, c, 0, 0.35, 0), cyl(0.1, 0.18, 0.25, c, 0, 0.82, 0)); return g; },
+};
+const BLEND_NAMES = { crate: 'Crate', plant: 'Plant', vase: 'Vase' };
+
+// ================== Networking ==================
+const net = {
+  mode: null,           // 'solo' | 'host' | 'client'
+  peer: null, conns: [], hostConn: null,
+  myId: 'me', myName: 'Player',
+};
+const players = new Map(); // id -> { id, name, color, role, caught, done, blended, avatar, target:{x,z,yaw} }
+
+function makeCode() { return Array.from({ length: 4 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.floor(Math.random() * 24)]).join(''); }
+
+function broadcast(msg, exceptConn = null) {
+  const s = JSON.stringify(msg);
+  if (net.mode === 'host') for (const c of net.conns) { if (c !== exceptConn && c.open) c.send(s); }
+  else if (net.mode === 'client' && net.hostConn?.open) net.hostConn.send(s);
+}
+
+function addPlayer(id, name) {
+  if (players.has(id)) return players.get(id);
+  const color = PALETTE[players.size % PALETTE.length];
+  const p = { id, name, color, role: 'editor', caught: false, done: false, blended: null, avatar: null, target: { x: 0, z: 5.6, yaw: 0 } };
+  players.set(id, p);
+  return p;
+}
+function lobbySnapshot() {
+  return [...players.values()].map(p => ({ id: p.id, name: p.name }));
+}
+
+function hostGame() {
+  net.myName = nameInput.value.trim() || 'Host';
+  const code = makeCode();
+  net.peer = new Peer('spotdiff-' + code);
+  net.peer.on('open', () => {
+    net.mode = 'host';
+    net.myId = net.peer.id;
+    addPlayer(net.myId, net.myName);
+    showLobby(code);
+  });
+  net.peer.on('error', e => { menuMsg.textContent = 'Connection error: ' + e.type + ' (try again)'; });
+  net.peer.on('connection', conn => {
+    conn.on('open', () => net.conns.push(conn));
+    conn.on('data', raw => {
+      const msg = JSON.parse(raw);
+      if (msg.t === 'hello') {
+        if (phase !== PHASES.LOBBY) { conn.send(JSON.stringify({ t: 'reject', why: 'Round already running — try again between rounds.' })); return; }
+        addPlayer(conn.peer, msg.name);
+        broadcast({ t: 'lobby', players: lobbySnapshot() });
+        refreshLobbyUI();
+      } else {
+        handleMsg(msg);
+        broadcast(msg, conn); // relay to everyone else
+      }
+    });
+    conn.on('close', () => {
+      net.conns = net.conns.filter(c => c !== conn);
+      if (phase === PHASES.LOBBY && players.has(conn.peer)) {
+        removeAvatar(players.get(conn.peer));
+        players.delete(conn.peer);
+        broadcast({ t: 'lobby', players: lobbySnapshot() });
+        refreshLobbyUI();
+      }
+    });
+  });
+}
+function joinGame() {
+  net.myName = nameInput.value.trim() || 'Guest';
+  const code = codeInput.value.trim().toUpperCase();
+  if (code.length !== 4) { menuMsg.textContent = 'Enter the 4-letter room code.'; return; }
+  menuMsg.textContent = 'Connecting…';
+  net.peer = new Peer();
+  net.peer.on('open', () => {
+    net.myId = net.peer.id;
+    const conn = net.peer.connect('spotdiff-' + code, { reliable: true });
+    net.hostConn = conn;
+    conn.on('open', () => {
+      net.mode = 'client';
+      conn.send(JSON.stringify({ t: 'hello', name: net.myName }));
+      showLobby(code);
+    });
+    conn.on('data', raw => handleMsg(JSON.parse(raw)));
+    conn.on('close', () => { alert('Lost connection to host.'); location.reload(); });
+  });
+  net.peer.on('error', e => {
+    menuMsg.textContent = e.type === 'peer-unavailable' ? 'No room with that code.' : 'Connection error: ' + e.type;
+  });
+}
+function soloGame() {
+  net.mode = 'solo';
+  net.myName = nameInput.value.trim() || 'You';
+  addPlayer('me', net.myName);
+  hostStartRound();
+}
+
+function handleMsg(msg) {
+  switch (msg.t) {
+    case 'reject': alert(msg.why); location.reload(); break;
+    case 'lobby':
+      for (const pl of msg.players) addPlayer(pl.id, pl.name);
+      for (const id of [...players.keys()]) if (!msg.players.some(pl => pl.id === id)) { removeAvatar(players.get(id)); players.delete(id); }
+      if (phase === PHASES.REVEAL) { hideMsg(); lobby.classList.remove('hidden'); phase = PHASES.LOBBY; }
+      refreshLobbyUI();
+      break;
+    case 'phase': applyPhase(msg); break;
+    case 'pos': {
+      const p = players.get(msg.id);
+      if (p) p.target = { x: msg.p[0], z: msg.p[1], yaw: msg.yaw };
+      break;
+    }
+    case 'edit': applyEdit(msg); break;
+    case 'blend': applyBlend(msg); break;
+    case 'done': {
+      const p = players.get(msg.id);
+      if (p) p.done = true;
+      if (net.mode === 'host') hostCheckPhaseDone();
+      break;
+    }
+    case 'pres': applyPointResult(msg); break;
+    case 'round-end': applyRoundEnd(msg); break;
+  }
+}
+
+// ================== Game state ==================
+const PHASES = { MENU: 'MENU', LOBBY: 'LOBBY', MEMORIZE: 'MEMORIZE', EDIT: 'EDIT', SEEK: 'SEEK', REVEAL: 'REVEAL' };
+let phase = PHASES.MENU;
+let round = 0;
+let memorizerId = null;
+let myBudget = 0, myEdited = 0;
+let carried = null, carriedLift = 0;
+let targetObj = null, pointing = null;
+let hotkeys = [], blendPicking = false;
+let ammo = 8;
+const AMMO_START = 8;
+let found = new Set(), authors = new Map(); // objRecord -> Set(playerId)
+let phaseTimer = null, phaseTimeLeft = 0;
+let statusHold = 0;
+
+const isMemorizer = () => memorizerId === net.myId;
+const me = () => players.get(net.myId);
+const editors = () => [...players.values()].filter(p => p.role === 'editor');
+
+function budgetFor(editorCount) {
+  return editorCount <= 1 ? 6 : editorCount === 2 ? 3 : editorCount <= 4 ? 2 : 1;
+}
+
+// ================== UI refs ==================
+const $ = id => document.getElementById(id);
+const menu = $('menu'), lobby = $('lobby'), msgOverlay = $('msg-overlay');
+const nameInput = $('name-input'), codeInput = $('code-input'), menuMsg = $('menu-msg');
+const title = $('phase-title'), help = $('phase-help');
+const toolbar = $('toolbar'), status = $('status');
+const lockhint = $('lockhint'), crosshair = $('crosshair');
+
+$('btn-host').onclick = hostGame;
+$('btn-join').onclick = joinGame;
+$('btn-solo').onclick = soloGame;
+
+function showLobby(code) {
+  menu.classList.add('hidden');
+  lobby.classList.remove('hidden');
+  $('room-code').textContent = code;
+  $('btn-start').classList.toggle('hidden', net.mode !== 'host');
+  $('btn-start').onclick = hostStartRound;
+  phase = PHASES.LOBBY;
+  refreshLobbyUI();
+}
+function refreshLobbyUI() {
+  const ul = $('player-list');
+  ul.innerHTML = '';
+  for (const p of players.values()) {
+    const li = document.createElement('li');
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.background = '#' + new THREE.Color(p.color).getHexString();
+    li.append(dot, p.name + (p.id === net.myId ? ' (you)' : ''));
+    ul.appendChild(li);
+  }
+  $('lobby-msg').textContent = net.mode === 'host'
+    ? (players.size < 2 ? 'You can start solo-style, but it’s better with friends!' : `${players.size} players ready.`)
+    : 'Waiting for the host to start…';
+}
+function showMsg(t, body, btnLabel = null, onClick = null) {
+  document.exitPointerLock?.();
+  $('msg-title').innerHTML = t;
+  $('msg-body').innerHTML = body;
+  const b = $('msg-btn');
+  if (btnLabel) {
+    b.textContent = btnLabel;
+    b.classList.remove('hidden');
+    b.onclick = () => { hideMsg(); onClick?.(); };
+  } else b.classList.add('hidden');
+  msgOverlay.classList.remove('hidden');
+  updateLockHint();
+}
+function hideMsg() { msgOverlay.classList.add('hidden'); updateLockHint(); }
+
+function setStatus(html, holdMs = 0) {
+  status.innerHTML = html;
+  status.classList.toggle('hidden', !html);
+  statusHold = performance.now() + holdMs;
+}
+function updateLockHint() {
+  const inGame = ![PHASES.MENU, PHASES.LOBBY].includes(phase) && msgOverlay.classList.contains('hidden');
+  lockhint.classList.toggle('hidden', locked || !inGame);
+  crosshair.classList.toggle('hidden', !inGame);
+}
+function setEmissive(obj, hex) {
+  obj.group.traverse(m => { if (m.isMesh) m.material.emissive?.setHex(hex); });
+}
+function flash(obj, hex, ms = 900) {
+  setEmissive(obj, hex);
+  setTimeout(() => { if (obj !== targetObj) setEmissive(obj, 0x000000); }, ms);
+}
+
+// ================== Phase control (host drives, everyone applies) ==================
+function hostStartRound() {
+  lobby.classList.add('hidden');
+  round++;
+  const ids = [...players.keys()];
+  const mem = ids[(round - 1) % ids.length];
+  const budget = budgetFor(Math.max(1, ids.length - 1));
+  const m = { t: 'phase', phase: PHASES.MEMORIZE, memorizer: mem, budget, dur: 60 };
+  applyPhase(m);
+  broadcast(m);
+  if (net.mode !== 'solo') hostSchedulePhaseEnd(60, () => hostAdvanceFrom(PHASES.MEMORIZE));
+}
+let hostTimer = null;
+function hostSchedulePhaseEnd(sec, fn) {
+  clearTimeout(hostTimer);
+  hostTimer = setTimeout(fn, sec * 1000);
+}
+function hostAdvanceFrom(fromPhase) {
+  if (phase !== fromPhase) return;
+  if (fromPhase === PHASES.MEMORIZE) {
+    const m = { t: 'phase', phase: PHASES.EDIT, dur: 120 };
+    applyPhase(m); broadcast(m);
+    hostSchedulePhaseEnd(120, () => hostAdvanceFrom(PHASES.EDIT));
+  } else if (fromPhase === PHASES.EDIT) {
+    const m = { t: 'phase', phase: PHASES.SEEK, dur: 180 };
+    applyPhase(m); broadcast(m);
+    hostSchedulePhaseEnd(180, () => hostEndRound('timeout'));
+  }
+}
+function hostCheckPhaseDone() {
+  if (net.mode !== 'host' && net.mode !== 'solo') return;
+  if (phase === PHASES.MEMORIZE && players.get(memorizerId)?.done) hostAdvanceFrom(PHASES.MEMORIZE);
+  else if (phase === PHASES.EDIT && editors().every(p => p.done)) hostAdvanceFrom(PHASES.EDIT);
+}
+function hostEndRound(reason) {
+  if (phase !== PHASES.SEEK) return;
+  const survivors = editors().filter(p => !p.caught).map(p => p.id);
+  const winner = reason === 'all-caught' ? 'memorizer' : 'editors';
+  const m = { t: 'round-end', winner, reason, survivors };
+  applyRoundEnd(m); broadcast(m);
+}
+
+function applyPhase(msg) {
+  clearInterval(phaseTimer);
+  phase = msg.phase;
+  hideMsg();
+  lobby.classList.add('hidden');
+  targetObj = null; pointing = null; blendPicking = false;
+
+  if (msg.phase === PHASES.MEMORIZE) {
+    resetRoom();
+    found = new Set(); authors = new Map();
+    ammo = AMMO_START;
+    memorizerId = msg.memorizer;
+    myBudget = msg.budget; myEdited = 0;
+    carried = null;
+    for (const p of players.values()) {
+      p.role = p.id === memorizerId ? 'memorizer' : 'editor';
+      p.caught = false; p.done = false; p.blended = null;
+    }
+    for (const o of objects) o.original = snapObj(o);
+    spawnAll();
+    startLocalCountdown(msg.dur);
+    if (isMemorizer()) {
+      title.textContent = '👀 You are the MEMORIZER';
+      help.textContent = 'Study everything: positions, colors, sizes, small details. The editors are planning around you.';
+    } else {
+      title.textContent = '🕵️ You are an EDITOR';
+      help.textContent = `Scout the room while the memorizer studies. You get ${myBudget} change${myBudget > 1 ? 's' : ''} — or blend in as furniture instead.`;
+    }
+    setStatus('WASD to walk · mouse to look');
+  }
+  else if (msg.phase === PHASES.EDIT) {
+    startLocalCountdown(msg.dur);
+    if (isMemorizer()) {
+      title.textContent = '🙈 Look away!';
+      help.textContent = 'The editors are changing the room…';
+      showMsg('🙈 Look away!', 'The editors are changing the room.<br>No peeking at the screen — that\'s the whole game.');
+    } else if (!me()?.caught) {
+      title.textContent = '🛠️ Edit the room';
+      help.textContent = `You have ${myBudget - myEdited} change(s) left. Aim at an object for options — or press B to blend in as furniture (uses your whole budget, but if you survive, editors win no matter what).`;
+      setStatus(`Changes left: ${myBudget - myEdited}`);
+    }
+  }
+  else if (msg.phase === PHASES.SEEK) {
+    if (carried) placeDown(true); // force-drop
+    startLocalCountdown(msg.dur);
+    if (isMemorizer()) {
+      title.textContent = '🔍 What changed?';
+      help.textContent = 'Point (click) at changed things. Each MISS costs ammo — run dry and the editors win. Catch every editor to win.';
+    } else {
+      title.textContent = me()?.blended ? '🫥 Hold still…' : '😬 Survive';
+      help.textContent = me()?.blended
+        ? 'You ARE the furniture. The memorizer is in the room. Do not get pointed at.'
+        : 'The memorizer is hunting. If your change gets found, you\'re caught. Act natural.';
+    }
+    updateSeekStatus();
+  }
+  renderToolbar();
+  updateLockHint();
+}
+function startLocalCountdown(sec) {
+  phaseTimeLeft = sec;
+  clearInterval(phaseTimer);
+  phaseTimer = setInterval(() => {
+    phaseTimeLeft--;
+    if (phaseTimeLeft <= 0) clearInterval(phaseTimer);
+  }, 1000);
+}
+
+function spawnAll() {
+  // arrange everyone in an arc facing the room
+  const ids = [...players.keys()];
+  ids.forEach((id, i) => {
+    const p = players.get(id);
+    const off = (i - (ids.length - 1) / 2) * 1.2;
+    p.target = { x: off, z: 5.6, yaw: 0 };
+    if (id === net.myId) { player.pos.set(off, 0, 5.6); player.yaw = 0; player.pitch = 0; }
+    ensureAvatar(p);
+  });
+}
+function ensureAvatar(p) {
+  if (p.id === net.myId) { if (p.avatar) { scene.remove(p.avatar); p.avatar = null; } return; }
+  if (!p.avatar) p.avatar = makeAvatar(p.color, p.name);
+  p.avatar.visible = true;
+  setAvatarGhost(p.avatar, false);
+}
+function removeAvatar(p) { if (p.avatar) { scene.remove(p.avatar); p.avatar = null; } }
+
+// ================== Round end / reveal ==================
+function applyRoundEnd(msg) {
+  clearInterval(phaseTimer);
+  clearTimeout(hostTimer);
+  phase = PHASES.REVEAL;
+  const iWon = (msg.winner === 'memorizer') === isMemorizer();
+  const changed = objects.filter(o => o.blendOwner || isChanged(o));
+  for (const o of changed) setEmissive(o, found.has(o) ? 0x004400 : 0x662200);
+  // reveal blended players
+  for (const p of players.values()) if (p.blended && p.avatar) { p.avatar.visible = true; }
+  const lines = changed.map(o => {
+    const who = o.blendOwner ? players.get(o.blendOwner)?.name
+      : [...(authors.get(o) || [])].map(id => players.get(id)?.name).join(', ');
+    const what = o.blendOwner ? '🫥 WAS A PLAYER' : describeDiffs(o).join(' + ');
+    return `${found.has(o) ? '✅' : '🙈'} <b>${o.name}</b> — ${what} <i>(${who || '?'})</i>`;
+  });
+  const reasonText = {
+    'all-caught': 'Every editor was caught!',
+    'ammo': 'The memorizer ran out of ammo!',
+    'timeout': 'Time ran out — survivors win!',
+    'giveup': 'The memorizer gave up!',
+  }[msg.reason] || '';
+  showMsg(
+    (msg.winner === 'memorizer' ? '🎉 Memorizer wins!' : '😈 Editors win!') + (iWon ? ' (that\'s you!)' : ''),
+    `${reasonText}<br><br>${lines.join('<br>')}<br><br>` +
+    (msg.survivors.length ? 'Survivors: ' + msg.survivors.map(id => players.get(id)?.name).join(', ') : ''),
+    (net.mode === 'host' || net.mode === 'solo') ? '↺ Next round' : null,
+    () => {
+      if (net.mode === 'solo') hostStartRound();
+      else { resetRoom(); lobby.classList.remove('hidden'); phase = PHASES.LOBBY; broadcast({ t: 'lobby', players: lobbySnapshot() }); refreshLobbyUI(); }
+    }
+  );
+  if (net.mode === 'client') $('msg-body').innerHTML += '<br><i>Waiting for the host to start the next round…</i>';
+  title.textContent = msg.winner === 'memorizer' ? '🎉 Memorizer wins!' : '😈 Editors win!';
+  help.textContent = '';
+  setStatus('');
+}
+
+// ================== Snapshots / diffs ==================
+function snapObj(o) {
+  const p = o.group.position;
+  return JSON.stringify({
+    p: [+p.x.toFixed(2), +p.z.toFixed(2)],
+    r: [+o.group.rotation.y.toFixed(2), +o.group.rotation.z.toFixed(2)],
+    s: +o.group.scale.x.toFixed(2),
+    c: o.paintables.map(m => m.material.color.getHex()),
+    v: o.details.map(m => (m.visible ? 1 : 0)),
+  });
+}
+const isChanged = o => !o.blendOwner && o.original !== undefined && snapObj(o) !== o.original;
+function describeDiffs(o) {
+  if (o.blendOwner) return ['was a player in disguise'];
+  const a = JSON.parse(o.original), b = JSON.parse(snapObj(o));
+  const out = [];
+  const dist = Math.hypot(a.p[0] - b.p[0], a.p[1] - b.p[1]);
+  if (dist > 0.01) out.push(dist >= 1.2 ? 'moved' : dist >= 0.3 ? 'shifted' : 'nudged');
+  let dr = Math.abs(a.r[0] - b.r[0]) % (Math.PI * 2);
+  if (dr > Math.PI) dr = Math.PI * 2 - dr;
+  if (dr > 0.01) out.push(dr >= 0.6 ? 'rotated' : 'turned slightly');
+  if (Math.abs(a.r[1] - b.r[1]) > 0.01) out.push('tilted');
+  if (Math.abs(a.s - b.s) > 0.005) out.push(b.s > a.s ? 'grown' : 'shrunk');
+  if (a.c.some((c, i) => c !== b.c[i])) out.push('repainted');
+  const missing = a.v.filter((v, i) => v === 1 && b.v[i] === 0).length;
+  const added = a.v.filter((v, i) => v === 0 && b.v[i] === 1).length;
+  if (missing) out.push('a piece stolen');
+  if (added) out.push('a piece snuck in');
+  return out;
+}
+
+// ================== Edits (all absolute, network-safe) ==================
+function creditAuthor(o, id) {
+  if (!authors.has(o)) authors.set(o, new Set());
+  authors.get(o).add(id);
+}
+function sendEdit(o, kind, data) {
+  const idx = objects.indexOf(o);
+  const msg = { t: 'edit', id: net.myId, obj: idx, kind, ...data };
+  applyEdit(msg);
+  broadcast(msg);
+  myEdited++;
+  renderToolbar();
+  setStatus(`Changes left: ${myBudget - myEdited}`);
+  if (myEdited >= myBudget) setStatus('Out of changes! Press Q when everyone\'s done — or just act casual.');
+}
+function applyEdit(msg) {
+  const o = objects[msg.obj] || (msg.blendOwner && objects.find(x => x.blendOwner === msg.blendOwner));
+  if (!o) return;
+  creditAuthor(o, msg.id);
+  switch (msg.kind) {
+    case 'move': o.group.position.x = msg.x; o.group.position.z = msg.z; break;
+    case 'roty': o.group.rotation.y = msg.v; break;
+    case 'rotz': o.group.rotation.z = msg.v; break;
+    case 'scale': o.group.scale.setScalar(msg.v); break;
+    case 'color': if (o.paintables[msg.i]) o.paintables[msg.i].material.color.setHex(msg.hex); break;
+    case 'colors': msg.hexes.forEach((h, i) => o.paintables[i]?.material.color.setHex(h)); break;
+    case 'detail': if (o.details[msg.i]) o.details[msg.i].visible = !!msg.vis; break;
+  }
+}
+
+const canEdit = () => phase === PHASES.EDIT && !isMemorizer() && !me()?.blended && myEdited < myBudget;
+
+function actGrab(o) {
+  if (!canEdit() || !o.movable) return;
+  carried = o;
+  const bbox = new THREE.Box3().setFromObject(o.group);
+  carriedLift = Math.max(0, (bbox.max.y - bbox.min.y) - 0.8) * 0.5;
+  setEmissive(o, 0x000000); targetObj = null;
+  renderToolbar();
+  setStatus('Carrying the ' + o.name.toLowerCase() + ' — press 1 to place it (this uses one change).');
+}
+function placeDown(silent = false) {
+  if (!carried) return;
+  const p = player.pos.clone().addScaledVector(forwardVec(), 1.4);
+  const x = THREE.MathUtils.clamp(p.x, -ROOM.w / 2 + 0.8, ROOM.w / 2 - 0.8);
+  const z = THREE.MathUtils.clamp(p.z, -ROOM.d / 2 + 0.8, ROOM.d / 2 - 0.8);
+  const o = carried; carried = null;
+  o.group.position.set(x, 0, z);
+  if (!silent) sendEdit(o, 'move', { x, z });
+}
+function actNudge(o, tiny) {
+  const a = Math.random() * Math.PI * 2, d = tiny ? 0.16 : 0.45;
+  sendEdit(o, 'move', {
+    x: THREE.MathUtils.clamp(o.group.position.x + Math.cos(a) * d, -ROOM.w / 2 + 0.8, ROOM.w / 2 - 0.8),
+    z: THREE.MathUtils.clamp(o.group.position.z + Math.sin(a) * d, -ROOM.d / 2 + 0.8, ROOM.d / 2 - 0.8),
+  });
+}
+function actRotate(o, small) { sendEdit(o, 'roty', { v: (o.group.rotation.y + (small ? 0.17 : Math.PI / 4)) % (Math.PI * 2) }); }
+function actTilt(o, slight) { sendEdit(o, 'rotz', { v: o.group.rotation.z + (Math.random() < 0.5 ? -1 : 1) * (slight ? 0.06 : 0.14) }); }
+function actRepaint(o, subtle) {
+  const vis = o.paintables.map((m, i) => ({ m, i })).filter(x => x.m.visible);
+  if (!vis.length) return;
+  if (subtle) {
+    const dh = (Math.random() < 0.5 ? -1 : 1) * (0.015 + Math.random() * 0.015);
+    const dl = (Math.random() < 0.5 ? -1 : 1) * 0.025;
+    const hexes = o.paintables.map(m => {
+      const c = m.material.color.clone(); c.offsetHSL(dh, 0.01, dl); return c.getHex();
+    });
+    sendEdit(o, 'colors', { hexes });
+  } else {
+    const t = vis[Math.floor(Math.random() * vis.length)];
+    sendEdit(o, 'color', { i: t.i, hex: PALETTE[Math.floor(Math.random() * PALETTE.length)] });
+  }
+}
+function actResize(o, f) { sendEdit(o, 'scale', { v: THREE.MathUtils.clamp(o.group.scale.x * f, 0.72, 1.35) }); }
+function actSteal(o) {
+  const vis = o.details.map((m, i) => ({ m, i })).filter(x => x.m.visible);
+  if (!vis.length) return;
+  sendEdit(o, 'detail', { i: vis[Math.floor(Math.random() * vis.length)].i, vis: 0 });
+}
+function actSneakIn(o) {
+  const hid = o.details.map((m, i) => ({ m, i })).filter(x => !x.m.visible);
+  if (!hid.length) return;
+  sendEdit(o, 'detail', { i: hid[Math.floor(Math.random() * hid.length)].i, vis: 1 });
+}
+
+// ================== Blend ==================
+function doBlend(propType) {
+  const x = THREE.MathUtils.clamp(player.pos.x, -ROOM.w / 2 + 0.8, ROOM.w / 2 - 0.8);
+  const z = THREE.MathUtils.clamp(player.pos.z, -ROOM.d / 2 + 0.8, ROOM.d / 2 - 0.8);
+  const color = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+  const msg = { t: 'blend', id: net.myId, prop: propType, x, z, color };
+  applyBlend(msg);
+  broadcast(msg);
+  blendPicking = false;
+  renderToolbar();
+  setStatus('You are now a ' + BLEND_NAMES[propType].toLowerCase() + '. You cannot move. Good luck. 🫥');
+}
+function applyBlend(msg) {
+  const p = players.get(msg.id);
+  if (!p || p.blended) return;
+  const g = BLEND_PROPS[msg.prop](msg.color);
+  g.userData.isObject = true;
+  g.position.set(msg.x, 0, msg.z);
+  scene.add(g);
+  const rec = { group: g, name: BLEND_NAMES[msg.prop], movable: false, wallItem: false, paintables: [], details: [], blendOwner: msg.id };
+  objects.push(rec);
+  p.blended = rec;
+  if (p.avatar) p.avatar.visible = false;
+  if (msg.id === net.myId) {
+    player.pos.set(msg.x, 0, msg.z);
+    player.blendLocked = true;
+  }
+}
+
+// ================== First-person controls ==================
+const player = { pos: new THREE.Vector3(0, 0, 5.6), yaw: 0, pitch: 0, walkT: 0, blendLocked: false };
+const EYE_HEIGHT = 1.5, SPEED = 4.4, REACH = 3.0;
+const keys = new Set();
+addEventListener('keydown', e => { keys.add(e.code); handleHotkey(e); });
+addEventListener('keyup', e => keys.delete(e.code));
+
+let locked = false;
+const canvas = renderer.domElement;
+canvas.addEventListener('click', () => {
+  if (!locked && ![PHASES.MENU, PHASES.LOBBY].includes(phase) && msgOverlay.classList.contains('hidden'))
+    canvas.requestPointerLock();
+});
+document.addEventListener('pointerlockchange', () => {
+  locked = document.pointerLockElement === canvas;
+  updateLockHint();
+});
+document.addEventListener('mousemove', e => {
+  if (!locked) return;
+  player.yaw -= e.movementX * 0.0022;
+  player.pitch = THREE.MathUtils.clamp(player.pitch - e.movementY * 0.0022, -1.25, 1.25);
+});
+function forwardVec() {
+  return new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw);
+}
+let lastPosSend = 0;
+function updatePlayer(dt) {
+  const eye = player.blendLocked ? 0.9 : EYE_HEIGHT;
+  if (!pointing && !player.blendLocked) {
+    const fx = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
+    const rx = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
+    if (fx || rx) {
+      const dir = new THREE.Vector3(rx, 0, -fx).normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw);
+      player.pos.addScaledVector(dir, SPEED * dt);
+      player.pos.x = THREE.MathUtils.clamp(player.pos.x, -ROOM.w / 2 + 0.5, ROOM.w / 2 - 0.5);
+      player.pos.z = THREE.MathUtils.clamp(player.pos.z, -ROOM.d / 2 + 0.5, ROOM.d / 2 - 0.5);
+      player.walkT += dt * 9;
+    }
+    camera.position.set(player.pos.x, eye + (fx || rx ? Math.sin(player.walkT * 1.1) * 0.03 : 0), player.pos.z);
+  } else {
+    camera.position.set(player.pos.x, eye, player.pos.z);
+  }
+  camera.rotation.set(player.pitch, player.yaw, 0);
+  if (carried) {
+    const hold = camera.position.clone().addScaledVector(forwardVec(), 1.25).add(new THREE.Vector3(0, -0.55, 0));
+    carried.group.position.set(hold.x, Math.max(0.2, hold.y - carriedLift), hold.z);
+  }
+  // network position updates
+  if (net.mode && net.mode !== 'solo' && performance.now() - lastPosSend > 80) {
+    lastPosSend = performance.now();
+    broadcast({ t: 'pos', id: net.myId, p: [+player.pos.x.toFixed(2), +player.pos.z.toFixed(2)], yaw: +player.yaw.toFixed(2) });
+  }
+}
+function updateAvatars(dt) {
+  for (const p of players.values()) {
+    if (!p.avatar || p.id === net.myId) continue;
+    p.avatar.position.x += (p.target.x - p.avatar.position.x) * Math.min(1, dt * 10);
+    p.avatar.position.z += (p.target.z - p.avatar.position.z) * Math.min(1, dt * 10);
+    p.avatar.rotation.y = p.target.yaw + Math.PI;
+    p.avatar.visible = !p.blended && ![PHASES.MENU, PHASES.LOBBY].includes(phase);
+  }
+}
+
+// ================== Crosshair targeting ==================
+const raycaster = new THREE.Raycaster();
+function updateTarget() {
+  let best = null;
+  const canAim = (phase === PHASES.EDIT && canEdit() && !carried) || (phase === PHASES.SEEK && isMemorizer() && !pointing);
+  if (canAim) {
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const hits = raycaster.intersectObjects(objects.map(o => o.group), true);
+    const hit = hits.find(h => h.object.visible);
+    if (hit && hit.distance <= REACH) {
+      let n = hit.object;
+      while (n && !n.userData.isObject) n = n.parent;
+      const o = objects.find(x => x.group === n);
+      if (o && !found.has(o) && !(phase === PHASES.EDIT && o.blendOwner)) best = o;
+    }
+  }
+  if (best === targetObj) return;
+  if (targetObj && !found.has(targetObj)) setEmissive(targetObj, 0x000000);
+  targetObj = best;
+  if (targetObj) setEmissive(targetObj, phase === PHASES.EDIT ? 0x2a2a00 : 0x00203a);
+  renderToolbar();
+}
+
+// ================== Pointing / catching ==================
+canvas.addEventListener('click', () => {
+  if (!locked || phase !== PHASES.SEEK || !isMemorizer() || pointing) return;
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  const hits = raycaster.intersectObjects(objects.map(o => o.group), true);
+  const hit = hits.find(h => h.object.visible);
+  if (!hit) return;
+  let n = hit.object;
+  while (n && !n.userData.isObject) n = n.parent;
+  const o = objects.find(x => x.group === n);
+  if (!o || found.has(o)) return;
+  if (hit.distance > REACH) { setStatus('🚶 Walk closer to point at that!', 1200); return; }
+  pointing = { obj: o, until: performance.now() + 650 };
+  setStatus(`🫵 You point at the ${o.name.toLowerCase()}…`, 700);
+});
+function resolvePoint() {
+  const o = pointing.obj;
+  pointing = null;
+  const idx = objects.indexOf(o);
+  const hit = o.blendOwner !== null || isChanged(o);
+  let caught = [];
+  if (hit) {
+    found.add(o);
+    if (o.blendOwner) caught = [o.blendOwner];
+    else caught = [...(authors.get(o) || [])];
+  } else {
+    ammo--;
+  }
+  const msg = { t: 'pres', obj: idx, hit, caught, ammo, byBlend: !!o.blendOwner };
+  applyPointResult(msg);
+  broadcast(msg);
+}
+function applyPointResult(msg) {
+  const o = objects[msg.obj];
+  ammo = msg.ammo;
+  if (msg.hit) {
+    found.add(o);
+    flash(o, 0x005500, 1500);
+    const names = msg.caught.map(id => players.get(id)?.name).join(' & ');
+    for (const id of msg.caught) {
+      const p = players.get(id);
+      if (p) { p.caught = true; if (p.avatar) setAvatarGhost(p.avatar, true); if (p.blended && p.avatar) p.avatar.visible = true; }
+      if (id === net.myId) {
+        showMsg('💀 CAUGHT!', 'Your ' + (me().blended ? 'disguise' : 'change') + ' was found. You can still walk around and spectate.', 'Ok…', () => { player.blendLocked = false; });
+      }
+    }
+    if (msg.byBlend && o.group) o.group.visible = false; // the "object" stands up and walks away
+    setStatus(msg.byBlend
+      ? `🚨 The ${o.name.toLowerCase()} was ${names} the WHOLE TIME!`
+      : `✅ The ${o.name.toLowerCase()} was ${describeDiffs(o).join(' + ')}! ${names ? names + ' is CAUGHT!' : ''}`, 2500);
+  } else {
+    flash(o, 0x550000);
+    setStatus(`❌ The ${o?.name.toLowerCase() ?? 'object'} is untouched. Ammo left: ${ammo}`, 1800);
+  }
+  // end conditions (host or solo decides)
+  if (net.mode === 'host' || net.mode === 'solo') {
+    if (editors().length && editors().every(p => p.caught)) hostEndRound('all-caught');
+    else if (msg.ammo <= 0) { phase === PHASES.SEEK && hostEndRoundAmmo(); }
+  }
+  updateSeekStatus();
+}
+function hostEndRoundAmmo() {
+  const survivors = editors().filter(p => !p.caught).map(p => p.id);
+  const m = { t: 'round-end', winner: 'editors', reason: 'ammo', survivors };
+  applyRoundEnd(m); broadcast(m);
+}
+function updateSeekStatus() {
+  if (phase !== PHASES.SEEK) return;
+  if (performance.now() < statusHold) return;
+  const caughtN = editors().filter(p => p.caught).length;
+  const bullets = '🎯'.repeat(Math.max(0, ammo)) || '∅';
+  setStatus(`${bullets} · caught ${caughtN}/${editors().length} editors · ⏱ ${Math.max(0, phaseTimeLeft)}s`);
+}
+
+// ================== Toolbar / hotkeys ==================
+function btn(label, fn, cls) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  if (cls) b.className = cls;
+  b.onclick = ev => fn(ev.shiftKey);
+  return b;
+}
+function renderToolbar() {
+  toolbar.innerHTML = '';
+  hotkeys = [];
+  const add = (label, fn, cls) => {
+    hotkeys.push(fn);
+    toolbar.append(btn(`[${hotkeys.length}] ${label}`, fn, cls));
+  };
+  if (phase === PHASES.MEMORIZE && isMemorizer()) {
+    toolbar.append(btn('[Q] Done memorizing →', sendDone));
+  } else if (phase === PHASES.EDIT && !isMemorizer()) {
+    if (me()?.blended) { /* locked in */ }
+    else if (blendPicking) {
+      add('📦 Become a crate', () => doBlend('crate'));
+      add('🪴 Become a plant', () => doBlend('plant'));
+      add('🏺 Become a vase', () => doBlend('vase'));
+      add('← Cancel', () => { blendPicking = false; renderToolbar(); }, 'secondary');
+    } else {
+      if (carried) add('⬇ Place down here', () => placeDown());
+      else if (targetObj && canEdit()) {
+        const o = targetObj;
+        if (o.movable) {
+          add(`✊ Grab ${o.name.toLowerCase()}`, () => actGrab(o));
+          add('↔ Nudge (⇧ tiny)', s => actNudge(o, s));
+          add('↻ Rotate (⇧ 10°)', s => actRotate(o, s));
+        } else add('↯ Tilt (⇧ slight)', s => actTilt(o, s));
+        add('🎨 Repaint (⇧ whisper)', s => actRepaint(o, s));
+        add('▽ Shrink (⇧ 4%)', s => actResize(o, s ? 0.96 : 0.9));
+        add('△ Grow (⇧ 4%)', s => actResize(o, s ? 1.04 : 1.1));
+        if (o.details.some(m => m.visible)) add('🕵️ Steal a piece', () => actSteal(o));
+        if (o.details.some(m => !m.visible)) add('➕ Sneak in a piece', () => actSneakIn(o));
+      }
+      if (myEdited === 0 && !carried)
+        toolbar.append(btn('[B] 🫥 Blend in instead', () => { blendPicking = true; renderToolbar(); }, 'danger'));
+      toolbar.append(btn('[Q] I\'m done →', sendDone, 'secondary'));
+    }
+  } else if (phase === PHASES.SEEK && isMemorizer()) {
+    toolbar.append(btn('[Q] Give up', () => {
+      if (net.mode === 'host' || net.mode === 'solo') hostEndRound('giveup');
+      else { const m = { t: 'round-end', winner: 'editors', reason: 'giveup', survivors: editors().filter(p => !p.caught).map(p => p.id) }; applyRoundEnd(m); broadcast(m); }
+    }, 'secondary'));
+  }
+}
+function sendDone() {
+  const p = me();
+  if (!p || p.done) return;
+  p.done = true;
+  broadcast({ t: 'done', id: net.myId });
+  if (net.mode === 'host' || net.mode === 'solo') {
+    if (net.mode === 'solo') {
+      if (phase === PHASES.MEMORIZE) { const m = { t: 'phase', phase: PHASES.EDIT, dur: 120 }; applyPhase(m); }
+      else if (phase === PHASES.EDIT) { const m = { t: 'phase', phase: PHASES.SEEK, dur: 180 }; applyPhase(m); }
+    } else hostCheckPhaseDone();
+  }
+  if (phase === PHASES.EDIT && net.mode !== 'solo') setStatus('Waiting for the other editors…');
+}
+function handleHotkey(e) {
+  if (!msgOverlay.classList.contains('hidden') || [PHASES.MENU, PHASES.LOBBY].includes(phase)) return;
+  if (e.code === 'KeyQ') {
+    if (phase === PHASES.MEMORIZE && isMemorizer()) sendDone();
+    else if (phase === PHASES.EDIT && !isMemorizer()) sendDone();
+    else if (phase === PHASES.SEEK && isMemorizer()) {
+      if (net.mode === 'host' || net.mode === 'solo') hostEndRound('giveup');
+    }
+    return;
+  }
+  if (e.code === 'KeyB' && phase === PHASES.EDIT && !isMemorizer() && myEdited === 0 && !me()?.blended && !carried) {
+    blendPicking = !blendPicking; renderToolbar(); return;
+  }
+  const m = e.code.match(/^Digit(\d)$/);
+  if (!m) return;
+  hotkeys[+m[1] - 1]?.(e.shiftKey);
+}
+
+// ================== Solo mode adjustments ==================
+// In solo, one person plays all roles hot-seat: memorize -> edit -> seek.
+// players map has just 'me'; role flips per phase.
+const _applyPhase = applyPhase;
+applyPhase = function (msg) {
+  if (net.mode === 'solo') {
+    if (msg.phase === PHASES.MEMORIZE) msg.memorizer = 'me';
+    _applyPhase(msg);
+    const p = players.get('me');
+    if (msg.phase === PHASES.EDIT) {
+      memorizerId = '__nobody__'; // you become the editor now
+      p.role = 'editor'; p.done = false;
+      title.textContent = '🛠️ Now edit the room (hot-seat)';
+      help.textContent = `Make your ${myBudget} changes, then press Q.`;
+      hideMsg();
+      renderToolbar();
+    } else if (msg.phase === PHASES.SEEK) {
+      memorizerId = 'me'; // and now you seek your own changes (for testing)
+      p.role = 'memorizer'; p.caught = false;
+      title.textContent = '🔍 Now find your own changes (testing mode)';
+      help.textContent = 'Obviously you know where they are — this mode is for testing the flow.';
+      renderToolbar();
+      updateSeekStatus();
+    }
+  } else _applyPhase(msg);
+};
+
+// solo end conditions: since there are no "editors", end when all changes found or ammo out
+const _applyPointResult = applyPointResult;
+applyPointResult = function (msg) {
+  if (net.mode === 'solo') {
+    const o = objects[msg.obj];
+    ammo = msg.ammo;
+    if (msg.hit) { found.add(o); flash(o, 0x005500, 1500); setStatus(`✅ ${o.name}: ${describeDiffs(o).join(' + ')}`, 2000); }
+    else { flash(o, 0x550000); setStatus(`❌ Untouched. Ammo: ${ammo}`, 1500); }
+    const remaining = objects.filter(x => (x.blendOwner || isChanged(x)) && !found.has(x)).length;
+    if (remaining === 0) applyRoundEnd({ winner: 'memorizer', reason: 'all-caught', survivors: [] });
+    else if (ammo <= 0) applyRoundEnd({ winner: 'editors', reason: 'ammo', survivors: [] });
+    else updateSeekStatus();
+  } else _applyPointResult(msg);
+};
+
+// ================== HUD countdown ==================
+setInterval(() => {
+  if ([PHASES.MEMORIZE, PHASES.EDIT].includes(phase) && phaseTimeLeft >= 0) {
+    const base = help.textContent.replace(/ · \d+s left$/, '');
+    help.textContent = `${base} · ${phaseTimeLeft}s left`;
+  }
+  if (phase === PHASES.SEEK) updateSeekStatus();
+}, 1000);
+
+// ================== Boot & loop ==================
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+camera.position.set(0, 1.5, 5.6);
+
+const clock = new THREE.Clock();
+(function loop() {
+  requestAnimationFrame(loop);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (![PHASES.MENU, PHASES.LOBBY].includes(phase) && msgOverlay.classList.contains('hidden')) {
+    updatePlayer(dt);
+    updateTarget();
+    if (pointing && performance.now() >= pointing.until) resolvePoint();
+  }
+  updateAvatars(dt);
+  renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>
