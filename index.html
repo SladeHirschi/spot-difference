@@ -702,6 +702,7 @@ function applyPhase(msg) {
     memorizerId = msg.memorizer;
     myBudget = msg.budget; myEdited = 0;
     carried = null;
+    player.blendLocked = false;
     for (const p of players.values()) {
       p.role = p.id === memorizerId ? 'memorizer' : 'editor';
       p.caught = false; p.done = false; p.blended = null;
@@ -939,6 +940,7 @@ function doBlend(propType) {
   applyBlend(msg);
   broadcast(msg);
   blendPicking = false;
+  sendDone(); // blending is your whole turn — you're locked in, so you're done editing
   renderToolbar();
   setStatus('You are now a ' + BLEND_NAMES[propType].toLowerCase() + '. You cannot move. Good luck. 🫥');
 }
@@ -1158,7 +1160,7 @@ function renderToolbar() {
         if (o.details.some(m => m.visible)) add('🕵️ Steal a piece', () => actSteal(o));
         if (o.details.some(m => !m.visible)) add('➕ Sneak in a piece', () => actSneakIn(o));
       }
-      if (myEdited === 0 && !carried)
+      if (myEdited === 0 && !carried && net.mode !== 'solo')
         toolbar.append(btn('[B] 🫥 Blend in instead', () => { blendPicking = true; renderToolbar(); }, 'danger'));
       toolbar.append(btn('[Q] I\'m done →', sendDone, 'secondary'));
     }
@@ -1192,7 +1194,7 @@ function handleHotkey(e) {
     }
     return;
   }
-  if (e.code === 'KeyB' && phase === PHASES.EDIT && !isMemorizer() && myEdited === 0 && !me()?.blended && !carried) {
+  if (e.code === 'KeyB' && phase === PHASES.EDIT && !isMemorizer() && myEdited === 0 && !me()?.blended && !carried && net.mode !== 'solo') {
     blendPicking = !blendPicking; renderToolbar(); return;
   }
   const m = e.code.match(/^Digit(\d)$/);
