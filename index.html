@@ -2,12 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Spot the Difference: The Game</title>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a2e; font-family: system-ui, sans-serif; }
   #app { position: fixed; inset: 0; }
-  canvas { display: block; }
+  canvas { display: block; touch-action: none; }
+  #joy-base { position: fixed; width: 120px; height: 120px; border-radius: 50%; background: rgba(255,255,255,.08); border: 2px solid rgba(255,255,255,.25); z-index: 5; pointer-events: none; }
+  #joy-knob { position: fixed; width: 50px; height: 50px; border-radius: 50%; background: rgba(255,255,255,.3); z-index: 5; pointer-events: none; }
 
   #hud {
     position: fixed; top: 0; left: 0; right: 0;
@@ -83,6 +85,8 @@
 <div id="status" class="hidden"></div>
 <div id="lockhint" class="hidden">Click to look around · <kbd>Esc</kbd> frees the mouse for the buttons</div>
 <div id="crosshair" class="hidden"></div>
+<div id="joy-base" class="hidden"></div>
+<div id="joy-knob" class="hidden"></div>
 
 <!-- Main menu -->
 <div id="menu" class="overlay">
@@ -107,6 +111,11 @@
   <h2>Lobby</h2>
   <p>Share this code with friends (they open this same page and hit Join):</p>
   <div id="room-code">----</div>
+  <div class="row">
+    <button id="mode-alter">🛠 Alter the room</button>
+    <button id="mode-blend" class="secondary">🫥 Blend in</button>
+  </div>
+  <p id="mode-desc"></p>
   <ul id="player-list"></ul>
   <p id="lobby-msg"></p>
   <button id="btn-start" class="hidden">Start round</button>
@@ -428,8 +437,10 @@ const BLEND_PROPS = {
   crate: c => { const g = new THREE.Group(); g.add(box(0.7, 0.7, 0.7, c, 0, 0.35, 0)); return g; },
   plant: c => { const g = new THREE.Group(); g.add(cyl(0.3, 0.22, 0.45, 0xc0632b, 0, 0.22, 0), sph(0.5, c, 0, 0.95, 0)); return g; },
   vase:  c => { const g = new THREE.Group(); g.add(cyl(0.18, 0.28, 0.7, c, 0, 0.35, 0), cyl(0.1, 0.18, 0.25, c, 0, 0.82, 0)); return g; },
+  stool: c => { const g = new THREE.Group(); g.add(cyl(0.3, 0.3, 0.08, c, 0, 0.55, 0), cyl(0.05, 0.08, 0.55, 0x333344, 0, 0.27, 0)); return g; },
+  lamp:  c => { const g = new THREE.Group(); g.add(cyl(0.25, 0.35, 0.1, 0x444455, 0, 0.05, 0), cyl(0.04, 0.04, 1.5, 0x888899, 0, 0.8, 0), cyl(0.25, 0.45, 0.5, c, 0, 1.75, 0)); return g; },
 };
-const BLEND_NAMES = { crate: 'Crate', plant: 'Plant', vase: 'Vase' };
+const BLEND_NAMES = { crate: 'Crate', plant: 'Plant', vase: 'Vase', stool: 'Stool', lamp: 'Floor lamp' };
 
 // ================== Networking ==================
 const net = {
@@ -478,7 +489,7 @@ function hostGame() {
       if (msg.t === 'hello') {
         if (phase !== PHASES.LOBBY) { conn.send(JSON.stringify({ t: 'reject', why: 'Round already running — try again between rounds.' })); return; }
         addPlayer(conn.peer, msg.name);
-        broadcast({ t: 'lobby', players: lobbySnapshot() });
+        broadcast({ t: 'lobby', players: lobbySnapshot(), mode: gameMode });
         refreshLobbyUI();
       } else {
         handleMsg(msg);
@@ -490,7 +501,7 @@ function hostGame() {
       if (phase === PHASES.LOBBY && players.has(conn.peer)) {
         removeAvatar(players.get(conn.peer));
         players.delete(conn.peer);
-        broadcast({ t: 'lobby', players: lobbySnapshot() });
+        broadcast({ t: 'lobby', players: lobbySnapshot(), mode: gameMode });
         refreshLobbyUI();
       }
     });
@@ -521,6 +532,7 @@ function joinGame() {
 }
 function soloGame() {
   net.mode = 'solo';
+  gameMode = 'alter'; // blend mode needs other players
   net.myName = nameInput.value.trim() || 'You';
   addPlayer('me', net.myName);
   hostStartRound();
@@ -530,6 +542,7 @@ function handleMsg(msg) {
   switch (msg.t) {
     case 'reject': alert(msg.why); location.reload(); break;
     case 'lobby':
+      if (msg.mode) gameMode = msg.mode;
       for (const pl of msg.players) addPlayer(pl.id, pl.name);
       for (const id of [...players.keys()]) if (!msg.players.some(pl => pl.id === id)) { removeAvatar(players.get(id)); players.delete(id); }
       if (phase === PHASES.REVEAL) { hideMsg(); lobby.classList.remove('hidden'); phase = PHASES.LOBBY; }
@@ -558,6 +571,7 @@ function handleMsg(msg) {
 const PHASES = { MENU: 'MENU', LOBBY: 'LOBBY', MEMORIZE: 'MEMORIZE', EDIT: 'EDIT', SEEK: 'SEEK', REVEAL: 'REVEAL' };
 let phase = PHASES.MENU;
 let round = 0;
+let gameMode = 'alter'; // 'alter' (change objects) | 'blend' (everyone hides as furniture)
 let memorizerId = null;
 let myBudget = 0, myEdited = 0;
 let carried = null, carriedLift = 0;
@@ -588,6 +602,14 @@ const lockhint = $('lockhint'), crosshair = $('crosshair');
 $('btn-host').onclick = hostGame;
 $('btn-join').onclick = joinGame;
 $('btn-solo').onclick = soloGame;
+$('mode-alter').onclick = () => setGameMode('alter');
+$('mode-blend').onclick = () => setGameMode('blend');
+function setGameMode(m) {
+  if (net.mode !== 'host') return;
+  gameMode = m;
+  broadcast({ t: 'lobby', players: lobbySnapshot(), mode: gameMode });
+  refreshLobbyUI();
+}
 
 function showLobby(code) {
   menu.classList.add('hidden');
@@ -612,6 +634,12 @@ function refreshLobbyUI() {
   $('lobby-msg').textContent = net.mode === 'host'
     ? (players.size < 2 ? 'You can start solo-style, but it’s better with friends!' : `${players.size} players ready.`)
     : 'Waiting for the host to start…';
+  $('mode-alter').className = gameMode === 'alter' ? '' : 'secondary';
+  $('mode-blend').className = gameMode === 'blend' ? '' : 'secondary';
+  $('mode-alter').disabled = $('mode-blend').disabled = net.mode !== 'host';
+  $('mode-desc').textContent = gameMode === 'alter'
+    ? 'Editors secretly change objects. The memorizer hunts the differences.'
+    : 'Every hider becomes an object in the room. The memorizer hunts the imposters.';
 }
 function showMsg(t, body, btnLabel = null, onClick = null) {
   document.exitPointerLock?.();
@@ -635,7 +663,7 @@ function setStatus(html, holdMs = 0) {
 }
 function updateLockHint() {
   const inGame = ![PHASES.MENU, PHASES.LOBBY].includes(phase) && msgOverlay.classList.contains('hidden');
-  lockhint.classList.toggle('hidden', locked || !inGame);
+  lockhint.classList.toggle('hidden', locked || !inGame || IS_TOUCH);
   crosshair.classList.toggle('hidden', !inGame);
 }
 function setEmissive(obj, hex) {
@@ -652,8 +680,8 @@ function hostStartRound() {
   round++;
   const ids = [...players.keys()];
   const mem = ids[(round - 1) % ids.length];
-  const budget = budgetFor(Math.max(1, ids.length - 1));
-  const m = { t: 'phase', phase: PHASES.MEMORIZE, memorizer: mem, budget, dur: 60 };
+  const budget = gameMode === 'blend' ? 0 : budgetFor(Math.max(1, ids.length - 1));
+  const m = { t: 'phase', phase: PHASES.MEMORIZE, memorizer: mem, budget, dur: 60, mode: gameMode };
   applyPhase(m);
   broadcast(m);
   if (net.mode !== 'solo') hostSchedulePhaseEnd(60, () => hostAdvanceFrom(PHASES.MEMORIZE));
@@ -700,6 +728,7 @@ function applyPhase(msg) {
     found = new Set(); authors = new Map();
     ammo = AMMO_START;
     memorizerId = msg.memorizer;
+    gameMode = msg.mode || gameMode;
     myBudget = msg.budget; myEdited = 0;
     carried = null;
     player.blendLocked = false;
@@ -714,8 +743,10 @@ function applyPhase(msg) {
       title.textContent = '👀 You are the MEMORIZER';
       help.textContent = 'Study everything: positions, colors, sizes, small details. The editors are planning around you.';
     } else {
-      title.textContent = '🕵️ You are an EDITOR';
-      help.textContent = `Scout the room while the memorizer studies. You get ${myBudget} change${myBudget > 1 ? 's' : ''} — or blend in as furniture instead.`;
+      title.textContent = gameMode === 'blend' ? '🫥 You are a HIDER' : '🕵️ You are an EDITOR';
+      help.textContent = gameMode === 'blend'
+        ? 'Scout the room while the memorizer studies — pick a clever spot to disguise yourself in.'
+        : `Scout the room while the memorizer studies. You get ${myBudget} change${myBudget > 1 ? 's' : ''}.`;
     }
     setStatus('WASD to walk · mouse to look');
   }
@@ -726,17 +757,27 @@ function applyPhase(msg) {
       help.textContent = 'The editors are changing the room…';
       showMsg('🙈 Look away!', 'The editors are changing the room.<br>No peeking at the screen — that\'s the whole game.');
     } else if (!me()?.caught) {
-      title.textContent = '🛠️ Edit the room';
-      help.textContent = `You have ${myBudget - myEdited} change(s) left. Aim at an object for options — or press B to blend in as furniture (uses your whole budget, but if you survive, editors win no matter what).`;
-      setStatus(`Changes left: ${myBudget - myEdited}`);
+      if (gameMode === 'blend') {
+        title.textContent = '🫥 Disguise yourself';
+        help.textContent = 'Walk somewhere clever and pick what to become. You\'ll be locked in place — choose wisely.';
+        setStatus('Pick a disguise from the buttons below.');
+      } else {
+        title.textContent = '🛠️ Edit the room';
+        help.textContent = `You have ${myBudget - myEdited} change(s) left. Aim at an object for options.`;
+        setStatus(`Changes left: ${myBudget - myEdited}`);
+      }
     }
   }
   else if (msg.phase === PHASES.SEEK) {
     if (carried) placeDown(true); // force-drop
+    if (gameMode === 'blend' && !isMemorizer() && me() && !me().caught && !me().blended)
+      doBlend(['crate', 'plant', 'vase', 'stool', 'lamp'][Math.floor(Math.random() * 5)]); // dawdlers get a random disguise
     startLocalCountdown(msg.dur);
     if (isMemorizer()) {
-      title.textContent = '🔍 What changed?';
-      help.textContent = 'Point (click) at changed things. Each MISS costs ammo — run dry and the editors win. Catch every editor to win.';
+      title.textContent = gameMode === 'blend' ? '🔍 Someone here is furniture' : '🔍 What changed?';
+      help.textContent = gameMode === 'blend'
+        ? 'Some of these objects weren\'t here before — they\'re players. Point at them. Misses cost ammo!'
+        : 'Point (click) at changed things. Each MISS costs ammo — run dry and the editors win. Catch every editor to win.';
     } else {
       title.textContent = me()?.blended ? '🫥 Hold still…' : '😬 Survive';
       help.textContent = me()?.blended
@@ -805,7 +846,7 @@ function applyRoundEnd(msg) {
     (net.mode === 'host' || net.mode === 'solo') ? '↺ Next round' : null,
     () => {
       if (net.mode === 'solo') hostStartRound();
-      else { resetRoom(); lobby.classList.remove('hidden'); phase = PHASES.LOBBY; broadcast({ t: 'lobby', players: lobbySnapshot() }); refreshLobbyUI(); }
+      else { resetRoom(); lobby.classList.remove('hidden'); phase = PHASES.LOBBY; broadcast({ t: 'lobby', players: lobbySnapshot(), mode: gameMode }); refreshLobbyUI(); }
     }
   );
   if (net.mode === 'client') $('msg-body').innerHTML += '<br><i>Waiting for the host to start the next round…</i>';
@@ -971,7 +1012,7 @@ addEventListener('keyup', e => keys.delete(e.code));
 let locked = false;
 const canvas = renderer.domElement;
 canvas.addEventListener('click', () => {
-  if (!locked && ![PHASES.MENU, PHASES.LOBBY].includes(phase) && msgOverlay.classList.contains('hidden'))
+  if (!IS_TOUCH && !locked && ![PHASES.MENU, PHASES.LOBBY].includes(phase) && msgOverlay.classList.contains('hidden'))
     canvas.requestPointerLock();
 });
 document.addEventListener('pointerlockchange', () => {
@@ -983,6 +1024,61 @@ document.addEventListener('mousemove', e => {
   player.yaw -= e.movementX * 0.0022;
   player.pitch = THREE.MathUtils.clamp(player.pitch - e.movementY * 0.0022, -1.25, 1.25);
 });
+
+// ---------- Touch controls (mobile) ----------
+const IS_TOUCH = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+const joy = { active: false, id: null, ox: 0, oy: 0, x: 0, y: 0 };
+let lookTouch = null;
+const joyBase = $('joy-base'), joyKnob = $('joy-knob');
+function endJoy() {
+  joy.active = false; joy.x = joy.y = 0;
+  joyBase.classList.add('hidden'); joyKnob.classList.add('hidden');
+}
+if (IS_TOUCH) {
+  canvas.addEventListener('touchstart', e => {
+    for (const t of e.changedTouches) {
+      if (!joy.active && t.clientX < innerWidth * 0.45) {
+        joy.active = true; joy.id = t.identifier;
+        joy.ox = t.clientX; joy.oy = t.clientY; joy.x = joy.y = 0;
+        joyBase.style.left = (t.clientX - 60) + 'px'; joyBase.style.top = (t.clientY - 60) + 'px';
+        joyKnob.style.left = (t.clientX - 25) + 'px'; joyKnob.style.top = (t.clientY - 25) + 'px';
+        joyBase.classList.remove('hidden'); joyKnob.classList.remove('hidden');
+      } else if (!lookTouch) {
+        lookTouch = { id: t.identifier, lx: t.clientX, ly: t.clientY, sx: t.clientX, sy: t.clientY, t0: performance.now() };
+      }
+    }
+    e.preventDefault();
+  }, { passive: false });
+  canvas.addEventListener('touchmove', e => {
+    for (const t of e.changedTouches) {
+      if (joy.active && t.identifier === joy.id) {
+        let dx = t.clientX - joy.ox, dy = t.clientY - joy.oy;
+        const len = Math.hypot(dx, dy), max = 55;
+        if (len > max) { dx *= max / len; dy *= max / len; }
+        joy.x = dx / max; joy.y = dy / max;
+        joyKnob.style.left = (joy.ox + dx - 25) + 'px'; joyKnob.style.top = (joy.oy + dy - 25) + 'px';
+      } else if (lookTouch && t.identifier === lookTouch.id) {
+        player.yaw -= (t.clientX - lookTouch.lx) * 0.005;
+        player.pitch = THREE.MathUtils.clamp(player.pitch - (t.clientY - lookTouch.ly) * 0.005, -1.25, 1.25);
+        lookTouch.lx = t.clientX; lookTouch.ly = t.clientY;
+      }
+    }
+    e.preventDefault();
+  }, { passive: false });
+  const onTouchEnd = e => {
+    for (const t of e.changedTouches) {
+      if (joy.active && t.identifier === joy.id) endJoy();
+      else if (lookTouch && t.identifier === lookTouch.id) {
+        const moved = Math.hypot(t.clientX - lookTouch.sx, t.clientY - lookTouch.sy);
+        if (moved < 12 && performance.now() - lookTouch.t0 < 350) tryPoint(); // tap = point
+        lookTouch = null;
+      }
+    }
+    e.preventDefault();
+  };
+  canvas.addEventListener('touchend', onTouchEnd, { passive: false });
+  canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
+}
 function forwardVec() {
   return new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw);
 }
@@ -990,16 +1086,18 @@ let lastPosSend = 0;
 function updatePlayer(dt) {
   const eye = player.blendLocked ? 0.9 : EYE_HEIGHT;
   if (!pointing && !player.blendLocked) {
-    const fx = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
-    const rx = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
-    if (fx || rx) {
+    let fx = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
+    let rx = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
+    if (joy.active) { rx += joy.x; fx -= joy.y; }
+    const moving = Math.abs(fx) > 0.05 || Math.abs(rx) > 0.05;
+    if (moving) {
       const dir = new THREE.Vector3(rx, 0, -fx).normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw);
-      player.pos.addScaledVector(dir, SPEED * dt);
+      player.pos.addScaledVector(dir, SPEED * dt * Math.min(1, Math.hypot(fx, rx)));
       player.pos.x = THREE.MathUtils.clamp(player.pos.x, -ROOM.w / 2 + 0.5, ROOM.w / 2 - 0.5);
       player.pos.z = THREE.MathUtils.clamp(player.pos.z, -ROOM.d / 2 + 0.5, ROOM.d / 2 - 0.5);
       player.walkT += dt * 9;
     }
-    camera.position.set(player.pos.x, eye + (fx || rx ? Math.sin(player.walkT * 1.1) * 0.03 : 0), player.pos.z);
+    camera.position.set(player.pos.x, eye + (moving ? Math.sin(player.walkT * 1.1) * 0.03 : 0), player.pos.z);
   } else {
     camera.position.set(player.pos.x, eye, player.pos.z);
   }
@@ -1048,8 +1146,8 @@ function updateTarget() {
 }
 
 // ================== Pointing / catching ==================
-canvas.addEventListener('click', () => {
-  if (!locked || phase !== PHASES.SEEK || !isMemorizer() || pointing) return;
+function tryPoint() {
+  if (phase !== PHASES.SEEK || !isMemorizer() || pointing) return;
   raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
   const hits = raycaster.intersectObjects(objects.map(o => o.group), true);
   const hit = hits.find(h => h.object.visible);
@@ -1061,7 +1159,8 @@ canvas.addEventListener('click', () => {
   if (hit.distance > REACH) { setStatus('🚶 Walk closer to point at that!', 1200); return; }
   pointing = { obj: o, until: performance.now() + 650 };
   setStatus(`🫵 You point at the ${o.name.toLowerCase()}…`, 700);
-});
+}
+canvas.addEventListener('click', () => { if (locked && !IS_TOUCH) tryPoint(); });
 function resolvePoint() {
   const o = pointing.obj;
   pointing = null;
@@ -1140,11 +1239,12 @@ function renderToolbar() {
     toolbar.append(btn('[Q] Done memorizing →', sendDone));
   } else if (phase === PHASES.EDIT && !isMemorizer()) {
     if (me()?.blended) { /* locked in */ }
-    else if (blendPicking) {
+    else if (gameMode === 'blend') {
       add('📦 Become a crate', () => doBlend('crate'));
       add('🪴 Become a plant', () => doBlend('plant'));
       add('🏺 Become a vase', () => doBlend('vase'));
-      add('← Cancel', () => { blendPicking = false; renderToolbar(); }, 'secondary');
+      add('🪑 Become a stool', () => doBlend('stool'));
+      add('💡 Become a lamp', () => doBlend('lamp'));
     } else {
       if (carried) add('⬇ Place down here', () => placeDown());
       else if (targetObj && canEdit()) {
@@ -1160,8 +1260,6 @@ function renderToolbar() {
         if (o.details.some(m => m.visible)) add('🕵️ Steal a piece', () => actSteal(o));
         if (o.details.some(m => !m.visible)) add('➕ Sneak in a piece', () => actSneakIn(o));
       }
-      if (myEdited === 0 && !carried && net.mode !== 'solo')
-        toolbar.append(btn('[B] 🫥 Blend in instead', () => { blendPicking = true; renderToolbar(); }, 'danger'));
       toolbar.append(btn('[Q] I\'m done →', sendDone, 'secondary'));
     }
   } else if (phase === PHASES.SEEK && isMemorizer()) {
@@ -1188,14 +1286,11 @@ function handleHotkey(e) {
   if (!msgOverlay.classList.contains('hidden') || [PHASES.MENU, PHASES.LOBBY].includes(phase)) return;
   if (e.code === 'KeyQ') {
     if (phase === PHASES.MEMORIZE && isMemorizer()) sendDone();
-    else if (phase === PHASES.EDIT && !isMemorizer()) sendDone();
+    else if (phase === PHASES.EDIT && !isMemorizer() && gameMode !== 'blend') sendDone();
     else if (phase === PHASES.SEEK && isMemorizer()) {
       if (net.mode === 'host' || net.mode === 'solo') hostEndRound('giveup');
     }
     return;
-  }
-  if (e.code === 'KeyB' && phase === PHASES.EDIT && !isMemorizer() && myEdited === 0 && !me()?.blended && !carried && net.mode !== 'solo') {
-    blendPicking = !blendPicking; renderToolbar(); return;
   }
   const m = e.code.match(/^Digit(\d)$/);
   if (!m) return;
